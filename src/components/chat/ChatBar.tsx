@@ -27,6 +27,7 @@ export default function ChatBar() {
     chatMessages,
     addChatMessage,
     isGenerating,
+    generatingLabel,
     setGenerating,
     addAsset,
     updateAsset,
@@ -53,14 +54,18 @@ export default function ChatBar() {
     addChatMessage(userMsg)
 
     if (isGenerationIntent(text)) {
-      setGenerating(true)
-      const thinkingMsg: ChatMessage = {
+      const hasProdiaKey = !!import.meta.env.VITE_PRODIA_API_KEY
+      const hasTripoKey = !!import.meta.env.VITE_TRIPO_API_KEY
+      const provider2d = hasProdiaKey ? 'Prodia' : 'demo mode'
+      const provider3d = hasTripoKey ? 'Tripo AI' : 'sample GLB'
+
+      setGenerating(true, `${provider2d} → ${provider3d}`)
+      addChatMessage({
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: 'Generating your 3D asset — routing through pipeline...',
+        content: `Pipeline active: ${provider2d} (2D) → ${provider3d} (3D). This may take up to 60s with live keys…`,
         timestamp: Date.now(),
-      }
-      addChatMessage(thinkingMsg)
+      })
 
       try {
         const assetId = crypto.randomUUID()
@@ -75,28 +80,33 @@ export default function ChatBar() {
         addAsset(placeholder)
         setActiveAsset(assetId)
 
-        updateAsset(assetId, { status: 'converting_3d' })
+        setGenerating(true, hasProdiaKey ? 'Prodia generating image…' : 'Skipping 2D (no key)')
+        updateAsset(assetId, { status: 'generating_2d' })
+
         const { imageUrl, glbUrl: rawGlb } = await runPipeline(text, 'draft')
-        const adapted = await adapt(rawGlb, 'Hunyuan3D / Tripo')
-        updateAsset(assetId, {
-          imageUrl,
-          glbUrl: adapted.glbUrl,
-          status: 'ready',
-        })
+
+        setGenerating(true, hasTripoKey ? 'Tripo AI converting to 3D…' : 'Loading sample GLB…')
+        updateAsset(assetId, { status: 'converting_3d' })
+
+        const adapted = await adapt(rawGlb, provider3d)
+        updateAsset(assetId, { imageUrl, glbUrl: adapted.glbUrl, status: 'ready' })
 
         addChatMessage({
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `Asset ready! Rendered from "${text}". You can now use the sliders or chat to modify it.`,
+          content: `Asset ready via ${provider3d}! Use the sliders or chat to modify it.`,
           timestamp: Date.now(),
         })
       } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error'
         addChatMessage({
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: 'Pipeline error — check console for details.',
+          content: `Pipeline error: ${msg}`,
           timestamp: Date.now(),
         })
+        const activeId = useStudio.getState().activeAssetId
+        if (activeId) updateAsset(activeId, { status: 'error' })
       } finally {
         setGenerating(false)
       }
@@ -172,7 +182,7 @@ export default function ChatBar() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && send()}
-            placeholder={isGenerating ? 'Generating…' : 'Describe or modify…'}
+            placeholder={isGenerating ? (generatingLabel || 'Generating…') : 'Describe or modify…'}
             disabled={isGenerating}
             className="flex-1 bg-studio-bg border border-studio-border rounded-lg px-3 py-2 text-xs text-studio-text placeholder-studio-muted outline-none focus:border-studio-accent transition disabled:opacity-50"
           />

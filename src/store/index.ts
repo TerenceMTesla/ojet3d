@@ -16,6 +16,7 @@ interface StudioState {
   activeAssetId: string | null
   chatMessages: ChatMessage[]
   isGenerating: boolean
+  generatingLabel: string
   isChatOpen: boolean
 
   addAsset: (asset: Asset) => void
@@ -23,7 +24,7 @@ interface StudioState {
   setActiveAsset: (id: string | null) => void
   applyTransform: (id: string, patch: Partial<TransformState>) => void
   addChatMessage: (msg: ChatMessage) => void
-  setGenerating: (v: boolean) => void
+  setGenerating: (v: boolean, label?: string) => void
   toggleChat: () => void
 }
 
@@ -32,6 +33,7 @@ export const useStudio = create<StudioState>((set) => ({
   activeAssetId: null,
   chatMessages: [],
   isGenerating: false,
+  generatingLabel: '',
   isChatOpen: true,
 
   addAsset: (asset) =>
@@ -56,7 +58,7 @@ export const useStudio = create<StudioState>((set) => ({
   addChatMessage: (msg) =>
     set((s) => ({ chatMessages: [...s.chatMessages, msg] })),
 
-  setGenerating: (v) => set({ isGenerating: v }),
+  setGenerating: (v, label = '') => set({ isGenerating: v, generatingLabel: label }),
   toggleChat: () => set((s) => ({ isChatOpen: !s.isChatOpen })),
 }))
 
