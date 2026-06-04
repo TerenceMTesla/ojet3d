@@ -1,19 +1,26 @@
-import { Suspense, useRef } from 'react'
+import { Suspense, useRef, useMemo } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Environment, Center, useGLTF, GizmoHelper, GizmoViewport } from '@react-three/drei'
 import { useStudio } from '../../store'
 import type { TransformState } from '../../types'
+import { useDeformShader } from './useDeformShader'
 import * as THREE from 'three'
 
 function Model({ url, transforms }: { url: string; transforms: TransformState }) {
   const { scene } = useGLTF(url)
-  const ref = useRef<THREE.Group>(null)
+  const groupRef = useRef<THREE.Group>(null)
+
+  // Stable clone — only recreates when the GLB source changes, not on every slider update.
+  // This ensures onBeforeCompile fires once and uniform updates land on the compiled shader.
+  const cloned = useMemo(() => scene.clone(true), [scene])
+
+  useDeformShader(cloned, transforms)
 
   return (
     <Center>
-      <group ref={ref}>
+      <group ref={groupRef}>
         <primitive
-          object={scene}
+          object={cloned}
           scale={[transforms.scaleX, transforms.scaleY, transforms.scaleZ]}
         />
       </group>
@@ -46,7 +53,7 @@ export default function Scene() {
 
       <Suspense fallback={<EmptyState />}>
         {active?.glbUrl ? (
-          <Model url={active.glbUrl} transforms={active.transforms} />
+          <Model key={active.id} url={active.glbUrl} transforms={active.transforms} />
         ) : (
           <EmptyState />
         )}
