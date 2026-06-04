@@ -3,7 +3,7 @@
  * Docs: https://platform.tripo3d.ai/docs/api-reference
  */
 
-const BASE = 'https://platform.tripo3d.ai/v2/openapi'
+const BASE = 'https://api.tripo3d.ai/v2/openapi'
 const POLL_INTERVAL_MS = 3000
 const POLL_TIMEOUT_MS = 180_000
 

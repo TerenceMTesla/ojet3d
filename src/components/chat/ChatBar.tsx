@@ -58,7 +58,7 @@ export default function ChatBar() {
       const useWorker = !!(import.meta.env.VITE_WORKER_URL ?? '').trim()
       const hasTripoKey = !!import.meta.env.VITE_TRIPO_API_KEY
       const modeLabel = useWorker
-        ? 'Worker (server-side)'
+        ? 'Sketchfab (via Worker)'
         : hasTripoKey ? 'Tripo AI text-to-3D' : 'demo mode (sample GLB)'
 
       setGenerating(true, modeLabel)

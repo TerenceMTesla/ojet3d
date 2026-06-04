@@ -42,6 +42,13 @@ export default {
         return cors(await forwardToJob(rest[0], 'get', 'GET', null, env))
       }
 
+      // Cached GLB asset (Sketchfab-sourced models stored in DO storage)
+      //   GET /asset/:jobId.glb
+      if (segment === 'asset' && rest[0]) {
+        const jobId = rest[0].replace(/\.glb$/i, '')
+        return cors(await forwardToJob(jobId, 'asset', 'GET', null, env))
+      }
+
       // Delta logging routes
       //   POST /delta          — log one training triplet
       //   GET  /deltas         — list all triplets (JSON)

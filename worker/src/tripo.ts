@@ -1,4 +1,4 @@
-const BASE = 'https://platform.tripo3d.ai/v2/openapi'
+const BASE = 'https://api.tripo3d.ai/v2/openapi'
 
 /**
  * Text-to-3D — send prompt directly, no image step needed.

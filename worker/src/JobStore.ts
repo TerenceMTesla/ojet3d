@@ -1,6 +1,10 @@
 import type { Job, Env } from './types'
 import { textToModelWithTripo, pollTripo } from './tripo'
 import { textToModelWithMeshy, pollMeshy } from './meshy'
+import { searchAndFetchGLB } from './sketchfab'
+
+const SAMPLE_GLB =
+  'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Duck/glTF-Binary/Duck.glb'
 
 /**
  * JobStore — one Durable Object instance per job (keyed by jobId).
@@ -56,8 +60,24 @@ export class JobStore implements DurableObject {
     if (action === 'get' && request.method === 'GET') {
       return this.handleGet()
     }
+    if (action === 'asset' && request.method === 'GET') {
+      return this.handleAsset()
+    }
 
     return new Response('Not found', { status: 404 })
+  }
+
+  // Serve cached GLB bytes for this job
+  private async handleAsset(): Promise<Response> {
+    const bytes = await this.state.storage.get<ArrayBuffer>('glb')
+    if (!bytes) return new Response('Asset not found', { status: 404 })
+    return new Response(bytes, {
+      headers: {
+        'Content-Type': 'model/gltf-binary',
+        'Cache-Control': 'public, max-age=3600',
+        'Access-Control-Allow-Origin': '*',
+      },
+    })
   }
 
   // ── Init: create job row + kick off pipeline in background ──────────────
@@ -69,15 +89,18 @@ export class JobStore implements DurableObject {
       ? !!this.env.MESHY_API_KEY
       : !!this.env.TRIPO_API_KEY
 
+    const hasSketchfab = !!this.env.SKETCHFAB_API_KEY
     const job: Job = {
       id: body.id,
       prompt: body.prompt,
       tier: body.tier as Job['tier'],
       status: 'queued',
-      provider2d: 'text-to-3D',
-      provider3d: body.tier === 'production'
-        ? (has3d ? 'Meshy AI' : 'Tripo AI')
-        : (has3d ? 'Tripo AI' : 'demo'),
+      provider2d: hasSketchfab ? 'Sketchfab search' : 'fallback',
+      provider3d: hasSketchfab ? 'Sketchfab CC library' : (
+        body.tier === 'production'
+          ? (has3d ? 'Meshy AI' : 'Tripo AI')
+          : (has3d ? 'Tripo AI' : 'demo')
+      ),
       createdAt: now,
       updatedAt: now,
     }
@@ -165,10 +188,23 @@ export class JobStore implements DurableObject {
 
   private async runPipeline(job: Job): Promise<void> {
     try {
-      this.updateJob({ status: 'converting_3d' })
       const workerUrl = this.env.WORKER_URL
 
-      // Production tier: Meshy AI text-to-3D (PBR)
+      // Primary path: Sketchfab search (free CC-licensed model library)
+      if (this.env.SKETCHFAB_API_KEY) {
+        this.updateJob({ status: 'converting_3d' })
+        const found = await searchAndFetchGLB(job.prompt, this.env.SKETCHFAB_API_KEY)
+        if (found) {
+          // Cache GLB bytes in this DO's persistent storage
+          await this.state.storage.put('glb', found.bytes.buffer)
+          const glbUrl = workerUrl ? `${workerUrl}/asset/${job.id}.glb` : SAMPLE_GLB
+          this.updateJob({ status: 'ready', glbUrl })
+          return
+        }
+        // No matching downloadable model → fall through to paid providers / sample
+      }
+
+      // Optional paid tiers (still wired in case keys present)
       if (job.tier === 'production' && this.env.MESHY_API_KEY) {
         const webhookUrl = workerUrl ? `${workerUrl}/webhook/meshy/${job.id}` : undefined
         const { taskId } = await textToModelWithMeshy(job.prompt, this.env.MESHY_API_KEY, webhookUrl)
@@ -178,8 +214,6 @@ export class JobStore implements DurableObject {
         }
         return
       }
-
-      // Draft tier: Tripo AI text-to-model (~30s, no image needed)
       if (this.env.TRIPO_API_KEY) {
         const webhookUrl = workerUrl ? `${workerUrl}/webhook/tripo/${job.id}` : undefined
         const { taskId } = await textToModelWithTripo(job.prompt, this.env.TRIPO_API_KEY, webhookUrl)
@@ -190,11 +224,8 @@ export class JobStore implements DurableObject {
         return
       }
 
-      // No 3D key — fall back to sample GLB so the studio stays functional
-      this.updateJob({
-        status: 'ready',
-        glbUrl: 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Duck/glTF-Binary/Duck.glb',
-      })
+      // Last resort: sample GLB so the studio stays functional
+      this.updateJob({ status: 'ready', glbUrl: SAMPLE_GLB })
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Unknown pipeline error'
       this.updateJob({ status: 'failed', error })

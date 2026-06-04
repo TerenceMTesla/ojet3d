@@ -50,6 +50,7 @@ export interface DeltaRecord {
 export interface Env {
   JOBS: DurableObjectNamespace
   DB: D1Database
+  SKETCHFAB_API_KEY: string
   TRIPO_API_KEY: string
   MESHY_API_KEY: string
   // The full public URL of this worker, used to build webhook callback URLs
