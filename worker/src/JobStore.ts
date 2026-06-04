@@ -67,9 +67,11 @@ export class JobStore implements DurableObject {
     return new Response('Not found', { status: 404 })
   }
 
-  // Serve cached GLB bytes for this job
+  // Serve cached GLB bytes from KV
   private async handleAsset(): Promise<Response> {
-    const bytes = await this.state.storage.get<ArrayBuffer>('glb')
+    const job = this.getJob()
+    if (!job) return new Response('Job not found', { status: 404 })
+    const bytes = await this.env.ASSETS.get(`glb:${job.id}`, 'arrayBuffer')
     if (!bytes) return new Response('Asset not found', { status: 404 })
     return new Response(bytes, {
       headers: {
@@ -124,29 +126,36 @@ export class JobStore implements DurableObject {
     const { readable, writable } = new TransformStream()
     const writer = writable.getWriter()
     const encoder = new TextEncoder()
+    let closed = false
 
     const send = (data: string) => {
-      writer.write(encoder.encode(`data: ${data}\n\n`)).catch(() => {})
+      if (closed) return
+      writer.write(encoder.encode(`data: ${data}\n\n`)).catch(() => {
+        closed = true
+        this.listeners.delete(send)
+      })
     }
 
-    // Immediately send current state
+    // Immediately replay current state
     const current = this.getJob()
     if (current) send(JSON.stringify(current))
 
-    // Register listener for future updates
+    // Register for future job updates
     this.listeners.add(send)
 
-    // Clean up when client disconnects
-    readable.pipeTo(new WritableStream()).catch(() => {
-      this.listeners.delete(send)
+    // If job is already terminal, close the stream after the initial payload
+    if (current?.status === 'ready' || current?.status === 'failed') {
       writer.close().catch(() => {})
-    })
+      closed = true
+      this.listeners.delete(send)
+    }
 
     return new Response(readable, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Access-Control-Allow-Origin': '*',
+        'X-Accel-Buffering': 'no',
       },
     })
   }
@@ -195,8 +204,10 @@ export class JobStore implements DurableObject {
         this.updateJob({ status: 'converting_3d' })
         const found = await searchAndFetchGLB(job.prompt, this.env.SKETCHFAB_API_KEY)
         if (found) {
-          // Cache GLB bytes in this DO's persistent storage
-          await this.state.storage.put('glb', found.bytes.buffer)
+          // Cache GLB bytes in KV (25MB limit, plenty for any GLB)
+          await this.env.ASSETS.put(`glb:${job.id}`, found.bytes, {
+            expirationTtl: 60 * 60 * 24 * 7, // 7 days
+          })
           const glbUrl = workerUrl ? `${workerUrl}/asset/${job.id}.glb` : SAMPLE_GLB
           this.updateJob({ status: 'ready', glbUrl })
           return

@@ -15,6 +15,10 @@
     { "tag": "v1", "new_sqlite_classes": ["JobStore"] }
   ],
 
+  "kv_namespaces": [
+    { "binding": "ASSETS", "id": "8cc15732d0df401a9e6e8151c9361351" }
+  ],
+
   "d1_databases": [
     {
       "binding": "DB",
