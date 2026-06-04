@@ -1,62 +1,130 @@
 /**
- * Generation pipeline — orchestrates the 2D→3D funnel.
+ * Generation pipeline — frontend entry point.
  *
- * Tier routing:
- *   draft      → Prodia (image) + Tripo AI (3D, ~8s, low-poly)
- *   production → Prodia (image) + Meshy AI (3D, ~90s, PBR)
+ * When VITE_WORKER_URL is set: delegates entirely to the Cloudflare Worker.
+ *   POST /generate        → returns { jobId }
+ *   GET  /status/:jobId   → SSE stream with Job state until status=ready|failed
  *
- * Key detection: if API keys are absent, falls back to a sample GLB so the
- * studio remains functional without credentials (dev / demo mode).
+ * Fallback (no worker URL, local dev): calls Prodia + Tripo directly from the
+ * browser using VITE_* keys. Functional but not tab-crash-safe.
  */
 
 import type { GenerationTier } from '../../types'
 import { generateWithProdia } from './prodia'
 import { convertWithTripo } from './tripo'
-import { convertWithMeshy } from './meshy'
 
 const ORTHO_SUFFIX =
-  ', isolated on solid neutral background, orthographic projection, uniform studio lighting, no shadows, no background, clean 3D-ready asset'
+  ', isolated on solid neutral background, orthographic projection, uniform studio lighting, no shadows, clean 3D-ready asset'
 
 const SAMPLE_GLB =
   'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Duck/glTF-Binary/Duck.glb'
 
-function hasKey(key: string | undefined): key is string {
-  return typeof key === 'string' && key.trim().length > 0
+function workerUrl(): string {
+  return (import.meta.env.VITE_WORKER_URL ?? '').trim()
 }
 
-export async function generateImage(prompt: string): Promise<string> {
-  if (!hasKey(import.meta.env.VITE_PRODIA_API_KEY)) {
-    console.warn('[Funnel] No Prodia key — skipping 2D generation, using direct text-to-3D path')
-    return ''
-  }
-  return generateWithProdia(prompt + ORTHO_SUFFIX)
-}
+// ── Worker-backed path (production) ──────────────────────────────────────
 
-export async function convertTo3D(
-  imageUrl: string,
+export async function runPipelineViaWorker(
+  prompt: string,
   tier: GenerationTier,
-): Promise<string> {
-  if (tier === 'production') {
-    if (!hasKey(import.meta.env.VITE_MESHY_API_KEY)) {
-      console.warn('[Funnel] No Meshy key — falling back to Tripo for production tier')
-    } else {
-      return convertWithMeshy(imageUrl)
-    }
-  }
+  onUpdate: (status: string, label: string) => void,
+): Promise<{ imageUrl: string; glbUrl: string }> {
+  const base = workerUrl()
 
-  if (!hasKey(import.meta.env.VITE_TRIPO_API_KEY)) {
-    console.warn('[Funnel] No Tripo key — using sample GLB (demo mode)')
-    return SAMPLE_GLB
-  }
+  const res = await fetch(`${base}/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, tier }),
+  })
+  if (!res.ok) throw new Error(`Worker /generate failed: ${res.status}`)
+  const { jobId } = await res.json() as { jobId: string }
 
-  return convertWithTripo(imageUrl)
+  return listenForCompletion(`${base}/status/${jobId}`, onUpdate)
 }
+
+function listenForCompletion(
+  sseUrl: string,
+  onUpdate: (status: string, label: string) => void,
+): Promise<{ imageUrl: string; glbUrl: string }> {
+  return new Promise((resolve, reject) => {
+    const es = new EventSource(sseUrl)
+
+    const timeout = setTimeout(() => {
+      es.close()
+      reject(new Error('Job timed out after 3 minutes'))
+    }, 180_000)
+
+    es.onmessage = (e) => {
+      try {
+        const job = JSON.parse(e.data) as {
+          status: string
+          provider2d: string
+          provider3d: string
+          imageUrl?: string
+          glbUrl?: string
+          error?: string
+        }
+
+        const label =
+          job.status === 'generating_image'
+            ? `${job.provider2d} generating image…`
+            : job.status === 'converting_3d'
+            ? `${job.provider3d} converting to 3D…`
+            : job.status
+
+        onUpdate(job.status, label)
+
+        if (job.status === 'ready' && job.glbUrl) {
+          clearTimeout(timeout)
+          es.close()
+          resolve({ imageUrl: job.imageUrl ?? '', glbUrl: job.glbUrl })
+        }
+        if (job.status === 'failed') {
+          clearTimeout(timeout)
+          es.close()
+          reject(new Error(job.error ?? 'Pipeline failed'))
+        }
+      } catch {
+        // malformed SSE frame — ignore
+      }
+    }
+
+    es.onerror = () => {
+      clearTimeout(timeout)
+      es.close()
+      reject(new Error('SSE connection lost'))
+    }
+  })
+}
+
+// ── Direct browser path (dev / no worker) ────────────────────────────────
 
 export async function runPipeline(
   prompt: string,
   tier: GenerationTier,
 ): Promise<{ imageUrl: string; glbUrl: string }> {
-  const imageUrl = await generateImage(prompt)
-  const glbUrl = await convertTo3D(imageUrl || prompt, tier)
-  return { imageUrl, glbUrl }
+  if (workerUrl()) {
+    // Shouldn't be called when worker is configured — use runPipelineViaWorker instead
+    return runPipelineViaWorker(prompt, tier, () => {})
+  }
+
+  let imageUrl = ''
+  if (import.meta.env.VITE_PRODIA_API_KEY) {
+    imageUrl = await generateWithProdia(prompt + ORTHO_SUFFIX)
+  }
+
+  const input = imageUrl || prompt
+
+  if (tier === 'production' && import.meta.env.VITE_MESHY_API_KEY) {
+    const glbUrl = await import('./meshy').then(m => m.convertWithMeshy(input))
+    return { imageUrl, glbUrl }
+  }
+
+  if (import.meta.env.VITE_TRIPO_API_KEY) {
+    const glbUrl = await convertWithTripo(input)
+    return { imageUrl, glbUrl }
+  }
+
+  return { imageUrl, glbUrl: SAMPLE_GLB }
 }

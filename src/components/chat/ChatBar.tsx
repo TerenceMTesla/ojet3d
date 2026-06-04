@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Send, Bot, User } from 'lucide-react'
 import { useStudio } from '../../store'
 import { parseMutation } from '../../utils/parseMutation'
-import { runPipeline } from '../../services/funnel/pipeline'
+import { runPipeline, runPipelineViaWorker } from '../../services/funnel/pipeline'
 import { adapt } from '../../services/adapters/UniversalAdapter'
 import { defaultTransforms } from '../../store'
 import type { Asset, ChatMessage } from '../../types'
@@ -54,16 +54,20 @@ export default function ChatBar() {
     addChatMessage(userMsg)
 
     if (isGenerationIntent(text)) {
+      const useWorker = !!(import.meta.env.VITE_WORKER_URL ?? '').trim()
       const hasProdiaKey = !!import.meta.env.VITE_PRODIA_API_KEY
       const hasTripoKey = !!import.meta.env.VITE_TRIPO_API_KEY
-      const provider2d = hasProdiaKey ? 'Prodia' : 'demo mode'
-      const provider3d = hasTripoKey ? 'Tripo AI' : 'sample GLB'
+      const modeLabel = useWorker
+        ? 'Worker (server-side)'
+        : hasProdiaKey ? `Prodia → ${hasTripoKey ? 'Tripo AI' : 'sample GLB'}` : 'demo mode'
 
-      setGenerating(true, `${provider2d} → ${provider3d}`)
+      setGenerating(true, modeLabel)
       addChatMessage({
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: `Pipeline active: ${provider2d} (2D) → ${provider3d} (3D). This may take up to 60s with live keys…`,
+        content: useWorker
+          ? 'Job submitted to Worker — pipeline runs server-side (tab-safe). Streaming updates…'
+          : `Pipeline active: ${modeLabel}. This may take up to 60s with live keys…`,
         timestamp: Date.now(),
       })
 
@@ -80,21 +84,30 @@ export default function ChatBar() {
         addAsset(placeholder)
         setActiveAsset(assetId)
 
-        setGenerating(true, hasProdiaKey ? 'Prodia generating image…' : 'Skipping 2D (no key)')
-        updateAsset(assetId, { status: 'generating_2d' })
+        let imageUrl = ''
+        let glbUrl = ''
 
-        const { imageUrl, glbUrl: rawGlb } = await runPipeline(text, 'draft')
+        if (useWorker) {
+          const result = await runPipelineViaWorker(text, 'draft', (status, label) => {
+            setGenerating(true, label)
+            updateAsset(assetId, { status: status as Asset['status'] })
+          })
+          imageUrl = result.imageUrl
+          glbUrl = result.glbUrl
+        } else {
+          updateAsset(assetId, { status: 'generating_2d' })
+          const result = await runPipeline(text, 'draft')
+          imageUrl = result.imageUrl
+          glbUrl = result.glbUrl
+        }
 
-        setGenerating(true, hasTripoKey ? 'Tripo AI converting to 3D…' : 'Loading sample GLB…')
-        updateAsset(assetId, { status: 'converting_3d' })
-
-        const adapted = await adapt(rawGlb, provider3d)
+        const adapted = await adapt(glbUrl, useWorker ? 'Worker' : modeLabel)
         updateAsset(assetId, { imageUrl, glbUrl: adapted.glbUrl, status: 'ready' })
 
         addChatMessage({
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: `Asset ready via ${provider3d}! Use the sliders or chat to modify it.`,
+          content: `Asset ready! Use the sliders or type commands like "make it 20% taller and add twist" to modify it.`,
           timestamp: Date.now(),
         })
       } catch (err) {

@@ -1,0 +1,10 @@
+# Copy to .dev.vars (gitignored) for local wrangler dev
+# Production secrets are set with: wrangler secret put <NAME>
+
+PRODIA_API_KEY=
+TRIPO_API_KEY=
+MESHY_API_KEY=
+
+# Set to your deployed worker URL once live, for webhook callbacks
+# Leave blank during local dev (pipeline will poll instead of using webhooks)
+WORKER_URL=
