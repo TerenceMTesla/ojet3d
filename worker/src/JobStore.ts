@@ -1,7 +1,6 @@
 import type { Job, Env } from './types'
-import { generateImage } from './prodia'
-import { convertWithTripo, pollTripo } from './tripo'
-import { convertWithMeshy, pollMeshy } from './meshy'
+import { textToModelWithTripo, pollTripo } from './tripo'
+import { textToModelWithMeshy, pollMeshy } from './meshy'
 
 /**
  * JobStore — one Durable Object instance per job (keyed by jobId).
@@ -66,7 +65,6 @@ export class JobStore implements DurableObject {
   private async handleInit(request: Request): Promise<Response> {
     const body = await request.json() as { id: string; prompt: string; tier: string }
     const now = Date.now()
-    const has2d = !!this.env.PRODIA_API_KEY
     const has3d = body.tier === 'production'
       ? !!this.env.MESHY_API_KEY
       : !!this.env.TRIPO_API_KEY
@@ -76,7 +74,7 @@ export class JobStore implements DurableObject {
       prompt: body.prompt,
       tier: body.tier as Job['tier'],
       status: 'queued',
-      provider2d: has2d ? 'Prodia' : 'none',
+      provider2d: 'text-to-3D',
       provider3d: body.tier === 'production'
         ? (has3d ? 'Meshy AI' : 'Tripo AI')
         : (has3d ? 'Tripo AI' : 'demo'),
@@ -167,38 +165,24 @@ export class JobStore implements DurableObject {
 
   private async runPipeline(job: Job): Promise<void> {
     try {
-      // Step 1: 2D image generation
-      let imageUrl = ''
-      if (this.env.PRODIA_API_KEY) {
-        this.updateJob({ status: 'generating_image' })
-        imageUrl = await generateImage(job.prompt, this.env.PRODIA_API_KEY)
-        this.updateJob({ imageUrl })
-      }
-
-      // Step 2: 3D conversion
       this.updateJob({ status: 'converting_3d' })
-      const input = imageUrl || job.prompt
       const workerUrl = this.env.WORKER_URL
 
+      // Production tier: Meshy AI text-to-3D (PBR)
       if (job.tier === 'production' && this.env.MESHY_API_KEY) {
-        const webhookUrl = workerUrl
-          ? `${workerUrl}/webhook/meshy/${job.id}`
-          : undefined
-        const { taskId } = await convertWithMeshy(input, this.env.MESHY_API_KEY, webhookUrl)
+        const webhookUrl = workerUrl ? `${workerUrl}/webhook/meshy/${job.id}` : undefined
+        const { taskId } = await textToModelWithMeshy(job.prompt, this.env.MESHY_API_KEY, webhookUrl)
         if (!webhookUrl) {
-          // No webhook — poll directly
-          const glbUrl = await pollMeshy(taskId, this.env.MESHY_API_KEY)
+          const glbUrl = await pollMeshy(taskId, this.env.MESHY_API_KEY, 'text-to-3d')
           this.updateJob({ status: 'ready', glbUrl })
         }
-        // With webhook, DO will be updated when Meshy calls back
         return
       }
 
+      // Draft tier: Tripo AI text-to-model (~30s, no image needed)
       if (this.env.TRIPO_API_KEY) {
-        const webhookUrl = workerUrl
-          ? `${workerUrl}/webhook/tripo/${job.id}`
-          : undefined
-        const { taskId } = await convertWithTripo(input, this.env.TRIPO_API_KEY, webhookUrl)
+        const webhookUrl = workerUrl ? `${workerUrl}/webhook/tripo/${job.id}` : undefined
+        const { taskId } = await textToModelWithTripo(job.prompt, this.env.TRIPO_API_KEY, webhookUrl)
         if (!webhookUrl) {
           const glbUrl = await pollTripo(taskId, this.env.TRIPO_API_KEY)
           this.updateJob({ status: 'ready', glbUrl })
@@ -206,7 +190,7 @@ export class JobStore implements DurableObject {
         return
       }
 
-      // No 3D key — use sample GLB
+      // No 3D key — fall back to sample GLB so the studio stays functional
       this.updateJob({
         status: 'ready',
         glbUrl: 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Duck/glTF-Binary/Duck.glb',

@@ -2,19 +2,14 @@
  * Generation pipeline — frontend entry point.
  *
  * When VITE_WORKER_URL is set: delegates entirely to the Cloudflare Worker.
- *   POST /generate        → returns { jobId }
- *   GET  /status/:jobId   → SSE stream with Job state until status=ready|failed
  *
- * Fallback (no worker URL, local dev): calls Prodia + Tripo directly from the
- * browser using VITE_* keys. Functional but not tab-crash-safe.
+ * Fallback (no worker URL, local dev):
+ *   draft      → Tripo AI text-to-model (~30s)
+ *   production → Meshy AI text-to-3D (PBR, ~90s)
+ *   no keys    → sample GLB (demo mode)
  */
 
 import type { GenerationTier } from '../../types'
-import { generateWithProdia } from './prodia'
-import { convertWithTripo } from './tripo'
-
-const ORTHO_SUFFIX =
-  ', isolated on solid neutral background, orthographic projection, uniform studio lighting, no shadows, clean 3D-ready asset'
 
 const SAMPLE_GLB =
   'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Duck/glTF-Binary/Duck.glb'
@@ -59,7 +54,6 @@ function listenForCompletion(
       try {
         const job = JSON.parse(e.data) as {
           status: string
-          provider2d: string
           provider3d: string
           imageUrl?: string
           glbUrl?: string
@@ -67,10 +61,8 @@ function listenForCompletion(
         }
 
         const label =
-          job.status === 'generating_image'
-            ? `${job.provider2d} generating image…`
-            : job.status === 'converting_3d'
-            ? `${job.provider3d} converting to 3D…`
+          job.status === 'converting_3d'
+            ? `${job.provider3d} generating 3D model…`
             : job.status
 
         onUpdate(job.status, label)
@@ -105,26 +97,18 @@ export async function runPipeline(
   tier: GenerationTier,
 ): Promise<{ imageUrl: string; glbUrl: string }> {
   if (workerUrl()) {
-    // Shouldn't be called when worker is configured — use runPipelineViaWorker instead
     return runPipelineViaWorker(prompt, tier, () => {})
   }
 
-  let imageUrl = ''
-  if (import.meta.env.VITE_PRODIA_API_KEY) {
-    imageUrl = await generateWithProdia(prompt + ORTHO_SUFFIX)
-  }
-
-  const input = imageUrl || prompt
-
   if (tier === 'production' && import.meta.env.VITE_MESHY_API_KEY) {
-    const glbUrl = await import('./meshy').then(m => m.convertWithMeshy(input))
-    return { imageUrl, glbUrl }
+    const glbUrl = await import('./meshy').then(m => m.textToModelWithMeshy(prompt))
+    return { imageUrl: '', glbUrl }
   }
 
   if (import.meta.env.VITE_TRIPO_API_KEY) {
-    const glbUrl = await convertWithTripo(input)
-    return { imageUrl, glbUrl }
+    const glbUrl = await import('./tripo').then(m => m.textToModelWithTripo(prompt))
+    return { imageUrl: '', glbUrl }
   }
 
-  return { imageUrl, glbUrl: SAMPLE_GLB }
+  return { imageUrl: '', glbUrl: SAMPLE_GLB }
 }

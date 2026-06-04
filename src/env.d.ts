@@ -2,7 +2,6 @@
 
 interface ImportMetaEnv {
   readonly VITE_WORKER_URL: string
-  readonly VITE_PRODIA_API_KEY: string
   readonly VITE_TRIPO_API_KEY: string
   readonly VITE_MESHY_API_KEY: string
 }

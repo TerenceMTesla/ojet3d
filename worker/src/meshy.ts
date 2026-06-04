@@ -1,5 +1,28 @@
 const BASE = 'https://api.meshy.ai/v2'
 
+export async function textToModelWithMeshy(
+  prompt: string,
+  apiKey: string,
+  webhookUrl?: string,
+): Promise<{ taskId: string }> {
+  const body: Record<string, unknown> = {
+    mode: 'preview',
+    prompt,
+    ai_model: 'meshy-4',
+    enable_pbr: true,
+  }
+  if (webhookUrl) body.webhook_url = webhookUrl
+
+  const res = await fetch(`${BASE}/text-to-3d`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Meshy text-to-3D failed: ${res.status}`)
+  const { result: taskId } = await res.json() as { result: string }
+  return { taskId }
+}
+
 export async function convertWithMeshy(
   imageUrl: string,
   apiKey: string,
@@ -17,16 +40,16 @@ export async function convertWithMeshy(
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`Meshy create failed: ${res.status}`)
+  if (!res.ok) throw new Error(`Meshy image-to-3D failed: ${res.status}`)
   const { result: taskId } = await res.json() as { result: string }
   return { taskId }
 }
 
-export async function pollMeshy(taskId: string, apiKey: string): Promise<string> {
+export async function pollMeshy(taskId: string, apiKey: string, endpoint = 'text-to-3d'): Promise<string> {
   const deadline = Date.now() + 180_000
   while (Date.now() < deadline) {
     await sleep(5000)
-    const res = await fetch(`${BASE}/image-to-3d/${taskId}`, {
+    const res = await fetch(`${BASE}/${endpoint}/${taskId}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
     })
     if (!res.ok) throw new Error(`Meshy poll failed: ${res.status}`)

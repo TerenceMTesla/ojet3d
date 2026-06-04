@@ -56,11 +56,10 @@ export default function ChatBar() {
 
     if (isGenerationIntent(text)) {
       const useWorker = !!(import.meta.env.VITE_WORKER_URL ?? '').trim()
-      const hasProdiaKey = !!import.meta.env.VITE_PRODIA_API_KEY
       const hasTripoKey = !!import.meta.env.VITE_TRIPO_API_KEY
       const modeLabel = useWorker
         ? 'Worker (server-side)'
-        : hasProdiaKey ? `Prodia → ${hasTripoKey ? 'Tripo AI' : 'sample GLB'}` : 'demo mode'
+        : hasTripoKey ? 'Tripo AI text-to-3D' : 'demo mode (sample GLB)'
 
       setGenerating(true, modeLabel)
       addChatMessage({

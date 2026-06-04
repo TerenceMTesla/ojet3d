@@ -5,3 +5,4 @@ dist
 *.local
 worker/.wrangler/
 worker/.wrangler/
+.env.local
