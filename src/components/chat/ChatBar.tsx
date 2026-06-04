@@ -5,6 +5,7 @@ import { parseMutation } from '../../utils/parseMutation'
 import { runPipeline, runPipelineViaWorker } from '../../services/funnel/pipeline'
 import { adapt } from '../../services/adapters/UniversalAdapter'
 import { defaultTransforms } from '../../store'
+import { logChatDelta } from '../../hooks/useDeltaLogger'
 import type { Asset, ChatMessage } from '../../types'
 
 function isGenerationIntent(text: string): boolean {
@@ -130,7 +131,18 @@ export default function ChatBar() {
     if (activeAssetId) {
       const mutations = parseMutation(text)
       if (Object.keys(mutations).length > 0) {
+        const currentAsset = useStudio.getState().assets.find(a => a.id === activeAssetId)
+        const beforeTransforms = currentAsset ? { ...currentAsset.transforms } : undefined
         applyTransform(activeAssetId, mutations)
+        // Log this chat-driven edit with the command text captured
+        if (currentAsset?.glbUrl && beforeTransforms) {
+          const afterTransforms = { ...beforeTransforms, ...mutations }
+          logChatDelta(
+            activeAssetId, currentAsset.prompt, text,
+            beforeTransforms, afterTransforms as typeof beforeTransforms,
+            currentAsset.glbUrl,
+          )
+        }
         const keys = Object.keys(mutations).join(', ')
         addChatMessage({
           id: crypto.randomUUID(),

@@ -26,8 +26,30 @@ export interface GenerateRequest {
   tier?: JobTier
 }
 
+export interface TransformSnapshot {
+  twist: number
+  taper: number
+  bend: number
+  smooth: number
+  scaleX: number
+  scaleY: number
+  scaleZ: number
+}
+
+export interface DeltaRecord {
+  id: string
+  assetId: string
+  prompt: string
+  actionText?: string
+  before: TransformSnapshot
+  after: TransformSnapshot
+  glbUrl: string
+  createdAt: number
+}
+
 export interface Env {
   JOBS: DurableObjectNamespace
+  DB: D1Database
   PRODIA_API_KEY: string
   TRIPO_API_KEY: string
   MESHY_API_KEY: string

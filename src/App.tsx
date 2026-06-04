@@ -4,9 +4,11 @@ import ChatBar from './components/chat/ChatBar'
 import TransformPanel from './components/controls/TransformPanel'
 import AssetList from './components/ui/AssetList'
 import { useStudio } from './store'
+import { useDeltaLogger } from './hooks/useDeltaLogger'
 
 export default function App() {
   const { isChatOpen } = useStudio()
+  useDeltaLogger()
 
   return (
     <div className="flex flex-col h-screen bg-studio-bg text-studio-text">

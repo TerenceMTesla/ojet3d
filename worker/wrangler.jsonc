@@ -15,6 +15,15 @@
     { "tag": "v1", "new_sqlite_classes": ["JobStore"] }
   ],
 
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ojet3d-deltas",
+      "database_id": "04f96aab-a532-419f-a3ae-14ba3f9a247b",
+      "migrations_dir": "./migrations"
+    }
+  ],
+
   "observability": {
     "enabled": true
   }
