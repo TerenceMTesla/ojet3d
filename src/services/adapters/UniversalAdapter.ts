@@ -1,6 +1,6 @@
 /**
  * UniversalAdapter — normalizes all incoming 3D assets to GLB regardless of source.
- * Tripo / Meshy / Hunyuan3D all output different container formats;
+ * Tripo / Sketchfab / future generators all output different container formats;
  * this layer ensures the viewport always receives a consistent GLB stream.
  */
 

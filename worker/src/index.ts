@@ -27,7 +27,6 @@ export default {
     //   GET  /status/:jobId
     //   GET  /job/:jobId
     //   POST /webhook/tripo/:jobId
-    //   POST /webhook/meshy/:jobId
 
     try {
       if (segment === 'generate' && request.method === 'POST') {
@@ -63,11 +62,9 @@ export default {
         return cors(await handleDeltaList(url, env))
       }
 
-      if (segment === 'webhook' && rest[0] && rest[1]) {
-        const provider = rest[0] // 'tripo' or 'meshy'
-        const jobId = rest[1]
+      if (segment === 'webhook' && rest[0] === 'tripo' && rest[1]) {
         return cors(
-          await forwardToJob(jobId, `webhook_${provider}`, 'POST', request, env),
+          await forwardToJob(rest[1], 'webhook_tripo', 'POST', request, env),
         )
       }
 

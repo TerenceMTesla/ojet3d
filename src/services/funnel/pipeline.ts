@@ -4,9 +4,8 @@
  * When VITE_WORKER_URL is set: delegates entirely to the Cloudflare Worker.
  *
  * Fallback (no worker URL, local dev):
- *   draft      → Tripo AI text-to-model (~30s)
- *   production → Meshy AI text-to-3D (PBR, ~90s)
- *   no keys    → sample GLB (demo mode)
+ *   has Tripo key → Tripo AI text-to-model (~30s, paid per generation)
+ *   no keys       → sample GLB (demo mode)
  */
 
 import type { GenerationTier } from '../../types'
@@ -94,15 +93,9 @@ function listenForCompletion(
 
 export async function runPipeline(
   prompt: string,
-  tier: GenerationTier,
 ): Promise<{ imageUrl: string; glbUrl: string }> {
   if (workerUrl()) {
-    return runPipelineViaWorker(prompt, tier, () => {})
-  }
-
-  if (tier === 'production' && import.meta.env.VITE_MESHY_API_KEY) {
-    const glbUrl = await import('./meshy').then(m => m.textToModelWithMeshy(prompt))
-    return { imageUrl: '', glbUrl }
+    return runPipelineViaWorker(prompt, 'draft', () => {})
   }
 
   if (import.meta.env.VITE_TRIPO_API_KEY) {

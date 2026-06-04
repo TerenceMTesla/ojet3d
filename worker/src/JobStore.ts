@@ -1,6 +1,5 @@
 import type { Job, Env } from './types'
 import { textToModelWithTripo, pollTripo } from './tripo'
-import { textToModelWithMeshy, pollMeshy } from './meshy'
 import { searchAndFetchGLB } from './sketchfab'
 
 const SAMPLE_GLB =
@@ -12,7 +11,7 @@ const SAMPLE_GLB =
  * Responsibilities:
  *   1. Persist job state in SQLite across requests/restarts
  *   2. Run the full 2D→3D pipeline (survives tab close)
- *   3. Accept webhook callbacks from Tripo/Meshy
+ *   3. Accept webhook callbacks from Tripo
  *   4. Fan out Server-Sent Events to all connected browser listeners
  */
 export class JobStore implements DurableObject {
@@ -54,9 +53,6 @@ export class JobStore implements DurableObject {
     if (action === 'webhook_tripo' && request.method === 'POST') {
       return this.handleWebhookTripo(request)
     }
-    if (action === 'webhook_meshy' && request.method === 'POST') {
-      return this.handleWebhookMeshy(request)
-    }
     if (action === 'get' && request.method === 'GET') {
       return this.handleGet()
     }
@@ -87,22 +83,18 @@ export class JobStore implements DurableObject {
   private async handleInit(request: Request): Promise<Response> {
     const body = await request.json() as { id: string; prompt: string; tier: string }
     const now = Date.now()
-    const has3d = body.tier === 'production'
-      ? !!this.env.MESHY_API_KEY
-      : !!this.env.TRIPO_API_KEY
-
     const hasSketchfab = !!this.env.SKETCHFAB_API_KEY
+    const hasTripo = !!this.env.TRIPO_API_KEY
+
     const job: Job = {
       id: body.id,
       prompt: body.prompt,
       tier: body.tier as Job['tier'],
       status: 'queued',
       provider2d: hasSketchfab ? 'Sketchfab search' : 'fallback',
-      provider3d: hasSketchfab ? 'Sketchfab CC library' : (
-        body.tier === 'production'
-          ? (has3d ? 'Meshy AI' : 'Tripo AI')
-          : (has3d ? 'Tripo AI' : 'demo')
-      ),
+      provider3d: hasSketchfab
+        ? 'Sketchfab CC library'
+        : hasTripo ? 'Tripo AI' : 'demo',
       createdAt: now,
       updatedAt: now,
     }
@@ -174,19 +166,6 @@ export class JobStore implements DurableObject {
     return new Response('ok')
   }
 
-  private async handleWebhookMeshy(request: Request): Promise<Response> {
-    const body = await request.json() as {
-      status: string
-      model_urls?: { glb?: string }
-    }
-    if (body.status === 'SUCCEEDED' && body.model_urls?.glb) {
-      this.updateJob({ status: 'ready', glbUrl: body.model_urls.glb })
-    } else if (body.status === 'FAILED' || body.status === 'EXPIRED') {
-      this.updateJob({ status: 'failed', error: `Meshy ${body.status}` })
-    }
-    return new Response('ok')
-  }
-
   private handleGet(): Response {
     const job = this.getJob()
     if (!job) return new Response('Not found', { status: 404 })
@@ -216,15 +195,7 @@ export class JobStore implements DurableObject {
       }
 
       // Optional paid tiers (still wired in case keys present)
-      if (job.tier === 'production' && this.env.MESHY_API_KEY) {
-        const webhookUrl = workerUrl ? `${workerUrl}/webhook/meshy/${job.id}` : undefined
-        const { taskId } = await textToModelWithMeshy(job.prompt, this.env.MESHY_API_KEY, webhookUrl)
-        if (!webhookUrl) {
-          const glbUrl = await pollMeshy(taskId, this.env.MESHY_API_KEY, 'text-to-3d')
-          this.updateJob({ status: 'ready', glbUrl })
-        }
-        return
-      }
+      // Optional generative fallback if Sketchfab returned nothing
       if (this.env.TRIPO_API_KEY) {
         const webhookUrl = workerUrl ? `${workerUrl}/webhook/tripo/${job.id}` : undefined
         const { taskId } = await textToModelWithTripo(job.prompt, this.env.TRIPO_API_KEY, webhookUrl)

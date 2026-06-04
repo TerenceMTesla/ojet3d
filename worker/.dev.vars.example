@@ -1,16 +1,14 @@
 # Copy to .dev.vars (gitignored) for local wrangler dev
 # Production secrets are set with: wrangler secret put <NAME>
 
-# 2D image generation: Pollinations.ai — free, no key needed
+# Sketchfab Data API token — free, primary path
+# https://sketchfab.com/settings/password → API token
+SKETCHFAB_API_KEY=
 
-# Tripo AI — fast draft-tier 3D (~8s)
+# Tripo AI — optional generative fallback used only if Sketchfab returns no match
 # https://platform.tripo3d.ai → Settings → API Keys
 TRIPO_API_KEY=
 
-# Meshy AI — PBR production-tier 3D
-# https://app.meshy.ai → avatar → API Keys
-MESHY_API_KEY=
-
-# Set to your deployed worker URL for webhook callbacks from Tripo/Meshy
+# Set to your deployed worker URL for webhook callbacks from Tripo
 # Leave blank during local dev — pipeline will poll instead
 WORKER_URL=

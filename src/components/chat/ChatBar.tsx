@@ -96,7 +96,7 @@ export default function ChatBar() {
           glbUrl = result.glbUrl
         } else {
           updateAsset(assetId, { status: 'generating_2d' })
-          const result = await runPipeline(text, 'draft')
+          const result = await runPipeline(text)
           imageUrl = result.imageUrl
           glbUrl = result.glbUrl
         }
