@@ -1,5 +1,5 @@
-import { Suspense, useMemo, useEffect, useState } from 'react'
-import { Canvas, useThree, useLoader } from '@react-three/fiber'
+import { Suspense, useMemo, useEffect, useState, useRef } from 'react'
+import { Canvas, useThree, useLoader, useFrame } from '@react-three/fiber'
 import {
   OrbitControls,
   Environment,
@@ -115,6 +115,44 @@ function EmptyState({ onUpload }: { onUpload: () => void }) {
   )
 }
 
+function GeneratingState({ label: _label }: { label: string }) {
+  const outerRef = useRef<THREE.Mesh>(null)
+  const innerRef = useRef<THREE.Mesh>(null)
+  const ringRef = useRef<THREE.Mesh>(null)
+
+  useFrame((_, delta) => {
+    if (outerRef.current) outerRef.current.rotation.y += delta * 0.6
+    if (innerRef.current) {
+      innerRef.current.rotation.x += delta * 0.9
+      innerRef.current.rotation.z += delta * 0.4
+    }
+    if (ringRef.current) {
+      ringRef.current.rotation.x += delta * 1.1
+      ringRef.current.rotation.y += delta * 0.3
+    }
+  })
+
+  return (
+    <group>
+      {/* Outer wireframe sphere */}
+      <mesh ref={outerRef}>
+        <sphereGeometry args={[1.2, 12, 8]} />
+        <meshStandardMaterial color="#7c3aed" wireframe opacity={0.4} transparent />
+      </mesh>
+      {/* Inner pulsing core */}
+      <mesh ref={innerRef}>
+        <octahedronGeometry args={[0.5]} />
+        <meshStandardMaterial color="#a78bfa" wireframe opacity={0.8} transparent />
+      </mesh>
+      {/* Orbit ring */}
+      <mesh ref={ringRef} rotation={[Math.PI / 3, 0, 0]}>
+        <torusGeometry args={[0.9, 0.02, 8, 48]} />
+        <meshStandardMaterial color="#7c3aed" opacity={0.6} transparent />
+      </mesh>
+    </group>
+  )
+}
+
 function FrameButton() {
   const { camera, controls } = useThree(state => ({
     camera: state.camera,
@@ -175,13 +213,22 @@ function DropZone({ onFile }: { onFile: (f: File) => void }) {
 // ── Main export ──────────────────────────────────────────────────────────────
 
 export default function Scene() {
-  const { assets, activeAssetId } = useStudio()
+  const { assets, activeAssetId, isGenerating, generatingLabel } = useStudio()
   const active = assets.find((a) => a.id === activeAssetId)
   const { openPicker, handleFile } = useUpload()
+  const isLoading = isGenerating || (active && active.status !== 'ready' && active.status !== 'error')
 
   return (
     <div className="relative w-full h-full">
       <DropZone onFile={handleFile} />
+      {isLoading && (
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
+          <div className="flex items-center gap-2 bg-studio-panel/90 border border-studio-border rounded-full px-4 py-2 text-xs text-studio-muted backdrop-blur-sm">
+            <span className="w-1.5 h-1.5 rounded-full bg-studio-accent animate-pulse" />
+            {generatingLabel || 'Searching…'}
+          </div>
+        </div>
+      )}
       <Canvas
         camera={{ position: [0, 1.5, 4], fov: 50 }}
         gl={{ antialias: true, alpha: false }}
@@ -197,6 +244,8 @@ export default function Scene() {
               <AutoFit trigger={active.id} />
               <AssetModel key={active.id} asset={active} />
             </Bounds>
+          ) : isLoading ? (
+            <GeneratingState label={generatingLabel} />
           ) : (
             <EmptyState onUpload={openPicker} />
           )}
