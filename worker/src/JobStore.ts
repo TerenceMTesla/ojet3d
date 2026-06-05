@@ -1,6 +1,6 @@
 import type { Job, Env } from './types'
 import { textToModelWithTripo, pollTripo } from './tripo'
-import { searchAndFetchGLB } from './sketchfab'
+import { searchAndFetchGLB, downloadCandidateGLB } from './sketchfab'
 
 const SAMPLE_GLB =
   'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Duck/glTF-Binary/Duck.glb'
@@ -34,6 +34,10 @@ export class JobStore implements DurableObject {
         image_url TEXT,
         glb_url TEXT,
         error TEXT,
+        variant_index INTEGER NOT NULL DEFAULT 0,
+        variant_count INTEGER NOT NULL DEFAULT 1,
+        variant_name TEXT,
+        variant_author TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )
@@ -59,8 +63,66 @@ export class JobStore implements DurableObject {
     if (action === 'asset' && request.method === 'GET') {
       return this.handleAsset()
     }
+    if (action === 'variant' && request.method === 'POST') {
+      return this.handleVariantSwap()
+    }
 
     return new Response('Not found', { status: 404 })
+  }
+
+  // Cycle to the next Sketchfab candidate from the original search.
+  // Downloads its GLB, replaces the KV entry, bumps variantIndex so the
+  // frontend cache-busts via the ?v= query param.
+  private async handleVariantSwap(): Promise<Response> {
+    const job = this.getJob()
+    if (!job) return new Response('Job not found', { status: 404 })
+    if (!this.env.SKETCHFAB_API_KEY) {
+      return new Response('Sketchfab key not configured', { status: 400 })
+    }
+
+    const candidates = await this.state.storage.get<
+      Array<{ uid: string; name: string; author: string }>
+    >('candidates')
+    if (!candidates || candidates.length < 2) {
+      return Response.json({ ok: false, reason: 'no alternates' })
+    }
+
+    // Find the next candidate that successfully downloads a GLB. Walk forward
+    // from the current index, wrapping around, so we don't get stuck on bad
+    // entries permanently.
+    const start = (job.variantIndex + 1) % candidates.length
+    let nextIndex = -1
+    let bytes: Uint8Array | null = null
+    let next: typeof candidates[number] | null = null
+
+    for (let step = 0; step < candidates.length; step++) {
+      const i = (start + step) % candidates.length
+      if (i === job.variantIndex) continue
+      const c = candidates[i]
+      const b = await downloadCandidateGLB(c.uid, this.env.SKETCHFAB_API_KEY)
+      if (b) { nextIndex = i; bytes = b; next = c; break }
+    }
+
+    if (!bytes || nextIndex < 0 || !next) {
+      return Response.json({ ok: false, reason: 'no usable variant' })
+    }
+
+    await this.env.ASSETS.put(`glb:${job.id}`, bytes, {
+      expirationTtl: 60 * 60 * 24 * 7,
+    })
+
+    const workerUrl = this.env.WORKER_URL
+    const glbUrl = workerUrl
+      ? `${workerUrl}/asset/${job.id}.glb?v=${nextIndex}`
+      : job.glbUrl
+    this.updateJob({
+      glbUrl,
+      variantIndex: nextIndex,
+      variantName: next.name,
+      variantAuthor: next.author,
+    })
+
+    return Response.json({ ok: true, variantIndex: nextIndex, name: next.name })
   }
 
   // Serve cached GLB bytes from KV
@@ -95,15 +157,19 @@ export class JobStore implements DurableObject {
       provider3d: hasSketchfab
         ? 'Sketchfab CC library'
         : hasTripo ? 'Tripo AI' : 'demo',
+      variantIndex: 0,
+      variantCount: 1,
       createdAt: now,
       updatedAt: now,
     }
 
     this.sql.exec(
-      `INSERT INTO jobs (id, prompt, tier, status, provider2d, provider3d, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO jobs (id, prompt, tier, status, provider2d, provider3d, variant_index, variant_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       job.id, job.prompt, job.tier, job.status,
-      job.provider2d, job.provider3d, job.createdAt, job.updatedAt,
+      job.provider2d, job.provider3d,
+      job.variantIndex, job.variantCount,
+      job.createdAt, job.updatedAt,
     )
 
     // Run pipeline without blocking the response
@@ -185,10 +251,29 @@ export class JobStore implements DurableObject {
         if (found) {
           // Cache GLB bytes in KV (25MB limit, plenty for any GLB)
           await this.env.ASSETS.put(`glb:${job.id}`, found.bytes, {
-            expirationTtl: 60 * 60 * 24 * 7, // 7 days
+            expirationTtl: 60 * 60 * 24 * 7,
           })
-          const glbUrl = workerUrl ? `${workerUrl}/asset/${job.id}.glb` : SAMPLE_GLB
-          this.updateJob({ status: 'ready', glbUrl })
+
+          // Persist the full candidate UID list in DO storage for later
+          // variant swaps. Keep it lightweight (UID + name only).
+          const candidateUids = found.candidates.map(c => ({
+            uid: c.uid,
+            name: c.name,
+            author: c.user.username,
+          }))
+          await this.state.storage.put('candidates', candidateUids)
+
+          const glbUrl = workerUrl
+            ? `${workerUrl}/asset/${job.id}.glb?v=0`
+            : SAMPLE_GLB
+          this.updateJob({
+            status: 'ready',
+            glbUrl,
+            variantIndex: found.pickedIndex,
+            variantCount: candidateUids.length,
+            variantName: found.modelName,
+            variantAuthor: found.author,
+          })
           return
         }
         // No matching downloadable model → fall through to paid providers / sample
@@ -222,9 +307,7 @@ export class JobStore implements DurableObject {
   // ── State helpers ────────────────────────────────────────────────────────
 
   private getJob(): Job | null {
-    const rows = this.sql
-      .exec('SELECT * FROM jobs LIMIT 1')
-      .toArray()
+    const rows = this.sql.exec('SELECT * FROM jobs LIMIT 1').toArray()
     if (!rows.length) return null
     const r = rows[0] as Record<string, unknown>
     return {
@@ -237,6 +320,10 @@ export class JobStore implements DurableObject {
       imageUrl: r.image_url as string | undefined,
       glbUrl: r.glb_url as string | undefined,
       error: r.error as string | undefined,
+      variantIndex: (r.variant_index as number) ?? 0,
+      variantCount: (r.variant_count as number) ?? 1,
+      variantName: r.variant_name as string | undefined,
+      variantAuthor: r.variant_author as string | undefined,
       createdAt: r.created_at as number,
       updatedAt: r.updated_at as number,
     }
@@ -246,10 +333,14 @@ export class JobStore implements DurableObject {
     const sets: string[] = ['updated_at = ?']
     const vals: unknown[] = [Date.now()]
 
-    if (patch.status !== undefined) { sets.push('status = ?'); vals.push(patch.status) }
-    if (patch.imageUrl !== undefined) { sets.push('image_url = ?'); vals.push(patch.imageUrl) }
-    if (patch.glbUrl !== undefined) { sets.push('glb_url = ?'); vals.push(patch.glbUrl) }
-    if (patch.error !== undefined) { sets.push('error = ?'); vals.push(patch.error) }
+    if (patch.status !== undefined)        { sets.push('status = ?');         vals.push(patch.status) }
+    if (patch.imageUrl !== undefined)      { sets.push('image_url = ?');      vals.push(patch.imageUrl) }
+    if (patch.glbUrl !== undefined)        { sets.push('glb_url = ?');        vals.push(patch.glbUrl) }
+    if (patch.error !== undefined)         { sets.push('error = ?');          vals.push(patch.error) }
+    if (patch.variantIndex !== undefined)  { sets.push('variant_index = ?');  vals.push(patch.variantIndex) }
+    if (patch.variantCount !== undefined)  { sets.push('variant_count = ?');  vals.push(patch.variantCount) }
+    if (patch.variantName !== undefined)   { sets.push('variant_name = ?');   vals.push(patch.variantName) }
+    if (patch.variantAuthor !== undefined) { sets.push('variant_author = ?'); vals.push(patch.variantAuthor) }
 
     this.sql.exec(`UPDATE jobs SET ${sets.join(', ')}`, ...vals)
 

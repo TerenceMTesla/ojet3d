@@ -19,11 +19,21 @@ function workerUrl(): string {
 
 // ── Worker-backed path (production) ──────────────────────────────────────
 
+export interface PipelineResult {
+  imageUrl: string
+  glbUrl: string
+  jobId?: string
+  variantIndex?: number
+  variantCount?: number
+  variantName?: string
+  variantAuthor?: string
+}
+
 export async function runPipelineViaWorker(
   prompt: string,
   tier: GenerationTier,
   onUpdate: (status: string, label: string) => void,
-): Promise<{ imageUrl: string; glbUrl: string }> {
+): Promise<PipelineResult> {
   const base = workerUrl()
 
   const res = await fetch(`${base}/generate`, {
@@ -34,13 +44,32 @@ export async function runPipelineViaWorker(
   if (!res.ok) throw new Error(`Worker /generate failed: ${res.status}`)
   const { jobId } = await res.json() as { jobId: string }
 
-  return listenForCompletion(`${base}/status/${jobId}`, onUpdate)
+  const completion = await listenForCompletion(`${base}/status/${jobId}`, onUpdate)
+  return { ...completion, jobId }
+}
+
+export async function swapVariant(jobId: string): Promise<{
+  glbUrl: string
+  variantIndex: number
+  variantName?: string
+} | null> {
+  const base = workerUrl()
+  if (!base) return null
+  const res = await fetch(`${base}/variant/${jobId}`, { method: 'POST' })
+  if (!res.ok) return null
+  const data = await res.json() as { ok: boolean; variantIndex?: number; name?: string }
+  if (!data.ok || typeof data.variantIndex !== 'number') return null
+  return {
+    glbUrl: `${base}/asset/${jobId}.glb?v=${data.variantIndex}`,
+    variantIndex: data.variantIndex,
+    variantName: data.name,
+  }
 }
 
 function listenForCompletion(
   sseUrl: string,
   onUpdate: (status: string, label: string) => void,
-): Promise<{ imageUrl: string; glbUrl: string }> {
+): Promise<PipelineResult> {
   return new Promise((resolve, reject) => {
     const es = new EventSource(sseUrl)
 
@@ -57,6 +86,10 @@ function listenForCompletion(
           imageUrl?: string
           glbUrl?: string
           error?: string
+          variantIndex?: number
+          variantCount?: number
+          variantName?: string
+          variantAuthor?: string
         }
 
         const label =
@@ -69,7 +102,14 @@ function listenForCompletion(
         if (job.status === 'ready' && job.glbUrl) {
           clearTimeout(timeout)
           es.close()
-          resolve({ imageUrl: job.imageUrl ?? '', glbUrl: job.glbUrl })
+          resolve({
+            imageUrl: job.imageUrl ?? '',
+            glbUrl: job.glbUrl,
+            variantIndex: job.variantIndex,
+            variantCount: job.variantCount,
+            variantName: job.variantName,
+            variantAuthor: job.variantAuthor,
+          })
         }
         if (job.status === 'failed') {
           clearTimeout(timeout)
@@ -91,9 +131,7 @@ function listenForCompletion(
 
 // ── Direct browser path (dev / no worker) ────────────────────────────────
 
-export async function runPipeline(
-  prompt: string,
-): Promise<{ imageUrl: string; glbUrl: string }> {
+export async function runPipeline(prompt: string): Promise<PipelineResult> {
   if (workerUrl()) {
     return runPipelineViaWorker(prompt, 'draft', () => {})
   }

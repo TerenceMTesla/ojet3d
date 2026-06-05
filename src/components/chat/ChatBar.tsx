@@ -84,25 +84,24 @@ export default function ChatBar() {
         addAsset(placeholder)
         setActiveAsset(assetId)
 
-        let imageUrl = ''
-        let glbUrl = ''
+        const result = useWorker
+          ? await runPipelineViaWorker(text, 'draft', (status, label) => {
+              setGenerating(true, label)
+              updateAsset(assetId, { status: status as Asset['status'] })
+            })
+          : (updateAsset(assetId, { status: 'generating_2d' }), await runPipeline(text))
 
-        if (useWorker) {
-          const result = await runPipelineViaWorker(text, 'draft', (status, label) => {
-            setGenerating(true, label)
-            updateAsset(assetId, { status: status as Asset['status'] })
-          })
-          imageUrl = result.imageUrl
-          glbUrl = result.glbUrl
-        } else {
-          updateAsset(assetId, { status: 'generating_2d' })
-          const result = await runPipeline(text)
-          imageUrl = result.imageUrl
-          glbUrl = result.glbUrl
-        }
-
-        const adapted = await adapt(glbUrl, useWorker ? 'Worker' : modeLabel)
-        updateAsset(assetId, { imageUrl, glbUrl: adapted.glbUrl, status: 'ready' })
+        const adapted = await adapt(result.glbUrl, useWorker ? 'Worker' : modeLabel)
+        updateAsset(assetId, {
+          imageUrl: result.imageUrl,
+          glbUrl: adapted.glbUrl,
+          status: 'ready',
+          jobId: result.jobId,
+          variantIndex: result.variantIndex,
+          variantCount: result.variantCount,
+          variantName: result.variantName,
+          variantAuthor: result.variantAuthor,
+        })
 
         addChatMessage({
           id: crypto.randomUUID(),

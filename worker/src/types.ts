@@ -17,6 +17,12 @@ export interface Job {
   imageUrl?: string
   glbUrl?: string
   error?: string
+  // Variant cycling: which candidate is currently shown, how many exist,
+  // and a version counter that bumps every swap so frontends can cache-bust.
+  variantIndex: number
+  variantCount: number
+  variantName?: string
+  variantAuthor?: string
   createdAt: number
   updatedAt: number
 }

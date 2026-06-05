@@ -5,81 +5,89 @@
  * All deformations are GPU-side: the original geometry buffer is never mutated,
  * so they are fully non-destructive and update in real time as sliders move.
  *
- * Deformation order (applied in vertex shader, after base vertex transform):
- *   1. Taper  — scale XZ linearly from bottom to top (uTaper > 0 = wider at top)
+ * Deformations are normalized by the scene's world-space height — a Twist=0.5
+ * on a tall sword and a Twist=0.5 on a small chest produce visually equivalent
+ * twist amounts. Without this, raw vertex Y put models of different size into
+ * wildly different deformation regimes.
+ *
+ * Order applied in vertex shader, after base vertex transform:
+ *   1. Taper  — scale XZ linearly from bottom to top
  *   2. Twist  — rotate around Y proportional to height
  *   3. Bend   — displace X quadratically along Y (with normal correction)
- *   4. Smooth — softens all deformations by lerping toward zero displacement
+ *   4. Smooth — softens all deformations toward neutral
  */
 
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import type { TransformState } from '../../types'
 
-// One stored shader ref per material so we can push uniform updates without
-// triggering recompilation.
 interface PatchedMaterial extends THREE.MeshStandardMaterial {
   _deformShader?: THREE.WebGLProgramParametersWithUniforms
 }
 
 const DEFORM_VERT_GLSL = /* glsl */`
-  // injected uniforms
   uniform float uTwist;
   uniform float uTaper;
   uniform float uBend;
   uniform float uSmooth;
+  uniform float uHalfHeight; // half the model's local Y extent — used to normalize deformations
 `
 
+// yNorm ranges from roughly -1 (bottom) to +1 (top) for any model size.
+// This is the key to making slider values feel consistent across assets.
 const DEFORM_BODY_GLSL = /* glsl */`
+  float yNorm = transformed.y / max(uHalfHeight, 0.01);
+
   // ── Taper ───────────────────────────────────────────────────────────────
-  // Scale XZ by a factor that grows linearly with height.
-  float taperScale = 1.0 + uTaper * (transformed.y * 0.5 + 0.5);
+  float taperScale = 1.0 + uTaper * (yNorm * 0.5 + 0.5);
   transformed.x *= taperScale;
   transformed.z *= taperScale;
 
   // ── Twist ────────────────────────────────────────────────────────────────
-  // Rotate around Y axis by an angle proportional to height.
-  float twistAngle = uTwist * transformed.y;
+  float twistAngle = uTwist * yNorm * 1.5;
   float ca = cos(twistAngle);
   float sa = sin(twistAngle);
   float tx = ca * transformed.x - sa * transformed.z;
   float tz = sa * transformed.x + ca * transformed.z;
   transformed.x = tx;
   transformed.z = tz;
-  // Rotate the object normal to keep lighting correct after twist
   float nx2 = ca * objectNormal.x - sa * objectNormal.z;
   float nz2 = sa * objectNormal.x + ca * objectNormal.z;
   objectNormal.x = nx2;
   objectNormal.z = nz2;
 
   // ── Bend ─────────────────────────────────────────────────────────────────
-  // Arc the mesh along X: displacement grows as Y^2 (parabolic curve).
-  float bendDisplace = uBend * transformed.y * transformed.y * 0.4;
+  float bendDisplace = uBend * yNorm * yNorm * uHalfHeight * 0.6;
   transformed.x += bendDisplace;
-  // Approximate normal correction for bend: tilt normal toward X.
-  objectNormal.x += uBend * transformed.y * 0.8;
+  objectNormal.x += uBend * yNorm * 0.8;
   objectNormal = normalize(objectNormal);
 
   // ── Smooth ───────────────────────────────────────────────────────────────
-  // Dampen all three deformations uniformly — acts as a global "relax" slider.
-  // We do this by lerping transformed back toward the pre-deform position.
-  // Since we can't easily go back, smooth instead scales the net displacement
-  // down: lerp toward the original position (stored before deformations).
-  // (Implemented as a post-deform lerp controlled by smooth factor)
+  // Pulls deformed point back toward original by uSmooth (0=no relax, 1=full reset).
+  vec3 originalLocal = position;
+  transformed = mix(transformed, originalLocal, uSmooth);
 `
+
+function measureSceneHeight(root: THREE.Object3D): number {
+  // Use the world-space bbox so the deformation strength matches what the user
+  // sees after Center has positioned the model.
+  const box = new THREE.Box3().setFromObject(root)
+  const size = new THREE.Vector3()
+  box.getSize(size)
+  return Math.max(size.y, 0.01)
+}
 
 export function useDeformShader(
   scene: THREE.Group | THREE.Object3D | null,
   transforms: TransformState,
 ): void {
-  // Store current transform values in a ref so the effect closure always reads
-  // the latest values without needing to re-patch materials on every change.
   const tRef = useRef(transforms)
   tRef.current = transforms
 
   useEffect(() => {
     if (!scene) return
 
+    const halfHeight = measureSceneHeight(scene) * 0.5
     const materials: PatchedMaterial[] = []
 
     scene.traverse((obj) => {
@@ -91,42 +99,35 @@ export function useDeformShader(
         const m = mat as PatchedMaterial
         if (!(m instanceof THREE.MeshStandardMaterial)) return
         if (m._deformShader) {
-          // Already patched — just sync uniforms
           materials.push(m)
           return
         }
 
         m.onBeforeCompile = (shader) => {
-          // Inject uniforms declaration before the main vertex function
           shader.vertexShader = shader.vertexShader.replace(
             '#include <common>',
             `#include <common>\n${DEFORM_VERT_GLSL}`,
           )
-
-          // Inject deformation code after Three.js computes `transformed`
-          // (#include <begin_vertex> sets `vec3 transformed = position;`)
           shader.vertexShader = shader.vertexShader.replace(
             '#include <begin_vertex>',
             `#include <begin_vertex>\n${DEFORM_BODY_GLSL}`,
           )
 
-          // Seed uniforms with current values
           const t = tRef.current
           shader.uniforms.uTwist = { value: t.twist }
           shader.uniforms.uTaper = { value: t.taper }
           shader.uniforms.uBend = { value: t.bend }
           shader.uniforms.uSmooth = { value: t.smooth }
+          shader.uniforms.uHalfHeight = { value: halfHeight }
 
           m._deformShader = shader
         }
 
-        // Force recompile on next render
         m.needsUpdate = true
         materials.push(m)
       })
     })
 
-    // Cleanup: remove patches when the GLB is swapped out
     return () => {
       materials.forEach((m) => {
         m.onBeforeCompile = () => {}
@@ -134,9 +135,8 @@ export function useDeformShader(
         m.needsUpdate = true
       })
     }
-  }, [scene]) // only re-patch when scene object changes (new GLB loaded)
+  }, [scene])
 
-  // Sync uniforms every time transforms change — no recompile needed
   useEffect(() => {
     if (!scene) return
     scene.traverse((obj) => {

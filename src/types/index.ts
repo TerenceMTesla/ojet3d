@@ -9,6 +9,7 @@ export type GenerationStatus =
 
 export interface Asset {
   id: string
+  jobId?: string  // Worker-side job id (for variant swaps + asset URL)
   prompt: string
   imageUrl?: string
   glbUrl?: string
@@ -16,6 +17,11 @@ export interface Asset {
   tier: GenerationTier
   createdAt: number
   transforms: TransformState
+  // Variant cycling (Sketchfab-sourced assets)
+  variantIndex?: number
+  variantCount?: number
+  variantName?: string
+  variantAuthor?: string
 }
 
 export interface TransformState {

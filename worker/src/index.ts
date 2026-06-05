@@ -48,6 +48,12 @@ export default {
         return cors(await forwardToJob(jobId, 'asset', 'GET', null, env))
       }
 
+      // Swap to the next Sketchfab candidate for an existing job.
+      //   POST /variant/:jobId
+      if (segment === 'variant' && rest[0]) {
+        return cors(await forwardToJob(rest[0], 'variant', 'POST', null, env))
+      }
+
       // Delta logging routes
       //   POST /delta          — log one training triplet
       //   GET  /deltas         — list all triplets (JSON)
