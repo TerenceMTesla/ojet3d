@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { MessageSquare, Download, Layers, Focus, Shuffle, Trash2, Loader2 } from 'lucide-react'
+import { MessageSquare, Download, Layers, Focus, Shuffle, Trash2, Loader2, Upload } from 'lucide-react'
 import { useStudio } from '../../store'
 import { swapVariant } from '../../services/funnel/pipeline'
+import { useUpload } from '../../hooks/useUpload'
 
 export default function Toolbar() {
   const { toggleChat, isChatOpen, assets, activeAssetId, updateAsset, removeAsset } = useStudio()
   const [swapping, setSwapping] = useState(false)
+  const { openPicker } = useUpload()
   const active = assets.find((a) => a.id === activeAssetId)
 
   const downloadGlb = () => {
@@ -58,6 +60,14 @@ export default function Toolbar() {
       </div>
 
       <div className="flex items-center gap-2">
+        <button
+          onClick={openPicker}
+          className="flex items-center gap-1.5 text-xs text-studio-muted hover:text-studio-text border border-studio-border rounded px-2.5 py-1 transition"
+          title="Upload GLB, GLTF, OBJ, STL, or image"
+        >
+          <Upload size={12} />
+          Upload
+        </button>
         {active?.glbUrl && (
           <>
             {hasVariants && (

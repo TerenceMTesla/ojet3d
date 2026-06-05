@@ -7,12 +7,15 @@ export type GenerationStatus =
   | 'ready'
   | 'error'
 
+export type AssetFileType = 'glb' | 'gltf' | 'obj' | 'stl' | 'image'
+
 export interface Asset {
   id: string
   jobId?: string  // Worker-side job id (for variant swaps + asset URL)
   prompt: string
   imageUrl?: string
   glbUrl?: string
+  fileType?: AssetFileType
   status: GenerationStatus
   tier: GenerationTier
   createdAt: number
