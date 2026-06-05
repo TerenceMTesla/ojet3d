@@ -23,6 +23,7 @@ interface StudioState {
   addAsset: (asset: Asset) => void
   updateAsset: (id: string, patch: Partial<Asset>) => void
   removeAsset: (id: string) => void
+  clearAll: () => void
   setActiveAsset: (id: string | null) => void
   applyTransform: (id: string, patch: Partial<TransformState>) => void
   addChatMessage: (msg: ChatMessage) => void
@@ -52,6 +53,8 @@ export const useStudio = create<StudioState>()(
           assets: s.assets.filter((a) => a.id !== id),
           activeAssetId: s.activeAssetId === id ? null : s.activeAssetId,
         })),
+
+      clearAll: () => set({ assets: [], activeAssetId: null, chatMessages: [] }),
 
       setActiveAsset: (id) => set({ activeAssetId: id }),
 
