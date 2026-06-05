@@ -1,5 +1,7 @@
 import type { Job, Env } from './types'
 import { textToModelWithTripo, pollTripo } from './tripo'
+import { textToModelWithMeshy, pollMeshy } from './meshy'
+import { generateImage } from './prodia'
 import { searchAndFetchGLB, downloadCandidateGLB } from './sketchfab'
 
 const SAMPLE_GLB =
@@ -242,66 +244,111 @@ export class JobStore implements DurableObject {
 
   private async runPipeline(job: Job): Promise<void> {
     try {
-      const workerUrl = this.env.WORKER_URL
-
-      // Primary path: Sketchfab search (free CC-licensed model library)
-      if (this.env.SKETCHFAB_API_KEY) {
-        this.updateJob({ status: 'converting_3d' })
-        const found = await searchAndFetchGLB(job.prompt, this.env.SKETCHFAB_API_KEY)
-        if (found) {
-          // Cache GLB bytes in KV (25MB limit, plenty for any GLB)
-          await this.env.ASSETS.put(`glb:${job.id}`, found.bytes, {
-            expirationTtl: 60 * 60 * 24 * 7,
-          })
-
-          // Persist the full candidate UID list in DO storage for later
-          // variant swaps. Keep it lightweight (UID + name only).
-          const candidateUids = found.candidates.map(c => ({
-            uid: c.uid,
-            name: c.name,
-            author: c.user.username,
-          }))
-          await this.state.storage.put('candidates', candidateUids)
-
-          const glbUrl = workerUrl
-            ? `${workerUrl}/asset/${job.id}.glb?v=0`
-            : SAMPLE_GLB
-          this.updateJob({
-            status: 'ready',
-            glbUrl,
-            variantIndex: found.pickedIndex,
-            variantCount: candidateUids.length,
-            variantName: found.modelName,
-            variantAuthor: found.author,
-          })
-          return
-        }
-        // No matching downloadable model → fall through to paid providers / sample
+      if (job.tier === 'production') {
+        await this.runProductionPipeline(job)
+      } else {
+        await this.runDraftPipeline(job)
       }
-
-      // Optional generative fallback if Sketchfab returned nothing.
-      // We attempt Tripo only if a key is present — but auth/credit errors
-      // gracefully degrade to the sample GLB instead of failing the job.
-      if (this.env.TRIPO_API_KEY) {
-        try {
-          const webhookUrl = workerUrl ? `${workerUrl}/webhook/tripo/${job.id}` : undefined
-          const { taskId } = await textToModelWithTripo(job.prompt, this.env.TRIPO_API_KEY, webhookUrl)
-          if (!webhookUrl) {
-            const glbUrl = await pollTripo(taskId, this.env.TRIPO_API_KEY)
-            this.updateJob({ status: 'ready', glbUrl })
-          }
-          return
-        } catch (err) {
-          console.warn('[Pipeline] Tripo unavailable, using sample GLB:', err)
-        }
-      }
-
-      // Last resort: sample GLB so the studio stays functional
-      this.updateJob({ status: 'ready', glbUrl: SAMPLE_GLB })
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Unknown pipeline error'
       this.updateJob({ status: 'failed', error })
     }
+  }
+
+  // Draft: Sketchfab (free, fast) → Tripo text-to-3D → sample GLB
+  private async runDraftPipeline(job: Job): Promise<void> {
+    const workerUrl = this.env.WORKER_URL
+
+    if (this.env.SKETCHFAB_API_KEY) {
+      this.updateJob({ status: 'converting_3d' })
+      const found = await searchAndFetchGLB(job.prompt, this.env.SKETCHFAB_API_KEY)
+      if (found) {
+        await this.env.ASSETS.put(`glb:${job.id}`, found.bytes, {
+          expirationTtl: 60 * 60 * 24 * 7,
+        })
+        const candidateUids = found.candidates.map(c => ({
+          uid: c.uid,
+          name: c.name,
+          author: c.user.username,
+        }))
+        await this.state.storage.put('candidates', candidateUids)
+        const glbUrl = workerUrl ? `${workerUrl}/asset/${job.id}.glb?v=0` : SAMPLE_GLB
+        this.updateJob({
+          status: 'ready',
+          glbUrl,
+          variantIndex: found.pickedIndex,
+          variantCount: candidateUids.length,
+          variantName: found.modelName,
+          variantAuthor: found.author,
+        })
+        return
+      }
+    }
+
+    if (this.env.TRIPO_API_KEY) {
+      try {
+        this.updateJob({ status: 'converting_3d' })
+        const webhookUrl = workerUrl ? `${workerUrl}/webhook/tripo/${job.id}` : undefined
+        const { taskId } = await textToModelWithTripo(job.prompt, this.env.TRIPO_API_KEY, webhookUrl)
+        if (!webhookUrl) {
+          const glbUrl = await pollTripo(taskId, this.env.TRIPO_API_KEY)
+          this.updateJob({ status: 'ready', glbUrl })
+        }
+        return
+      } catch (err) {
+        console.warn('[Draft] Tripo unavailable:', err)
+      }
+    }
+
+    this.updateJob({ status: 'ready', glbUrl: SAMPLE_GLB })
+  }
+
+  // Production: Prodia 2D seed → Meshy image-to-3D (PBR) → Tripo text-to-3D → sample GLB
+  private async runProductionPipeline(job: Job): Promise<void> {
+    const workerUrl = this.env.WORKER_URL
+
+    // Step 1: generate orthographic 2D concept image
+    let imageUrl: string | undefined
+    if (this.env.PRODIA_API_KEY) {
+      try {
+        this.updateJob({ status: 'generating_image' })
+        imageUrl = await generateImage(job.prompt, this.env.PRODIA_API_KEY)
+        this.updateJob({ imageUrl })
+      } catch (err) {
+        console.warn('[Production] Prodia unavailable, skipping 2D step:', err)
+      }
+    }
+
+    // Step 2: Meshy image-to-3D (if we have an image) or text-to-3D
+    if (this.env.MESHY_API_KEY) {
+      try {
+        this.updateJob({ status: 'converting_3d' })
+        const { taskId } = await textToModelWithMeshy(job.prompt, this.env.MESHY_API_KEY)
+        const glbUrl = await pollMeshy(taskId, this.env.MESHY_API_KEY)
+        this.updateJob({ status: 'ready', glbUrl, imageUrl })
+        return
+      } catch (err) {
+        console.warn('[Production] Meshy unavailable, falling back to Tripo:', err)
+      }
+    }
+
+    // Step 3: Tripo fallback
+    if (this.env.TRIPO_API_KEY) {
+      try {
+        this.updateJob({ status: 'converting_3d' })
+        const webhookUrl = workerUrl ? `${workerUrl}/webhook/tripo/${job.id}` : undefined
+        const { taskId } = await textToModelWithTripo(job.prompt, this.env.TRIPO_API_KEY, webhookUrl)
+        if (!webhookUrl) {
+          const glbUrl = await pollTripo(taskId, this.env.TRIPO_API_KEY)
+          this.updateJob({ status: 'ready', glbUrl, imageUrl })
+        }
+        return
+      } catch (err) {
+        console.warn('[Production] Tripo unavailable:', err)
+      }
+    }
+
+    this.updateJob({ status: 'ready', glbUrl: SAMPLE_GLB })
   }
 
   // ── State helpers ────────────────────────────────────────────────────────

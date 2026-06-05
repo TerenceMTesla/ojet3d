@@ -59,6 +59,8 @@ export interface Env {
   ASSETS: KVNamespace
   SKETCHFAB_API_KEY: string
   TRIPO_API_KEY: string
+  MESHY_API_KEY: string
+  PRODIA_API_KEY: string
   // The full public URL of this worker, used to build webhook callback URLs
   WORKER_URL: string
 }

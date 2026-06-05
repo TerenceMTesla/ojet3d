@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Bot, User } from 'lucide-react'
+import { Send, Bot, User, Zap, Star } from 'lucide-react'
+import type { GenerationTier } from '../../types'
 import { useStudio } from '../../store'
 import { parseMutation } from '../../utils/parseMutation'
 import { runPipeline, runPipelineViaWorker } from '../../services/funnel/pipeline'
@@ -23,6 +24,7 @@ function isGenerationIntent(text: string): boolean {
 
 export default function ChatBar() {
   const [input, setInput] = useState('')
+  const [tier, setTier] = useState<GenerationTier>('draft')
   const bottomRef = useRef<HTMLDivElement>(null)
   const {
     chatMessages,
@@ -85,7 +87,7 @@ export default function ChatBar() {
         setActiveAsset(assetId)
 
         const result = useWorker
-          ? await runPipelineViaWorker(text, 'draft', (status, label) => {
+          ? await runPipelineViaWorker(text, tier, (status, label) => {
               setGenerating(true, label)
               updateAsset(assetId, { status: status as Asset['status'] })
             })
@@ -200,6 +202,33 @@ export default function ChatBar() {
       </div>
 
       <div className="p-3 border-t border-studio-border">
+        {/* Draft / Final tier toggle */}
+        <div className="flex gap-1 mb-2">
+          <button
+            onClick={() => setTier('draft')}
+            className={`flex-1 flex items-center justify-center gap-1 text-xs rounded px-2 py-1 transition border ${
+              tier === 'draft'
+                ? 'bg-studio-accent border-studio-accent text-white'
+                : 'border-studio-border text-studio-muted hover:text-studio-text'
+            }`}
+            title="Fast & free — Sketchfab library search"
+          >
+            <Zap size={11} />
+            Draft
+          </button>
+          <button
+            onClick={() => setTier('production')}
+            className={`flex-1 flex items-center justify-center gap-1 text-xs rounded px-2 py-1 transition border ${
+              tier === 'production'
+                ? 'bg-amber-500 border-amber-500 text-white'
+                : 'border-studio-border text-studio-muted hover:text-studio-text'
+            }`}
+            title="PBR quality — Meshy AI text-to-3D generation"
+          >
+            <Star size={11} />
+            Final
+          </button>
+        </div>
         <div className="flex gap-2">
           <input
             value={input}
