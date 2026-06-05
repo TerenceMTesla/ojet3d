@@ -9,17 +9,22 @@ import { defaultTransforms } from '../../store'
 import { logChatDelta } from '../../hooks/useDeltaLogger'
 import type { Asset, ChatMessage } from '../../types'
 
-function isGenerationIntent(text: string): boolean {
+// Transform keywords that indicate the user wants to modify an existing asset
+const TRANSFORM_KEYWORDS = [
+  'twist', 'taper', 'bend', 'smooth', 'scale', 'wider', 'taller', 'bigger',
+  'smaller', 'rotate', 'flip', 'stretch', 'squish', 'inflate', 'shrink',
+  'make it', 'more', 'less', 'add', 'remove', 'increase', 'decrease', '%',
+]
+
+function isTransformIntent(text: string): boolean {
   const t = text.toLowerCase()
-  return (
-    t.startsWith('create') ||
-    t.startsWith('generate') ||
-    t.startsWith('make a') ||
-    t.startsWith('build') ||
-    t.startsWith('new ') ||
-    t.includes('generate a') ||
-    t.includes('create a')
-  )
+  return TRANSFORM_KEYWORDS.some(kw => t.includes(kw))
+}
+
+// Anything that isn't a clear transform command is treated as a generation prompt
+function isGenerationIntent(text: string, hasActiveAsset: boolean): boolean {
+  if (!hasActiveAsset) return true
+  return !isTransformIntent(text)
 }
 
 export default function ChatBar() {
@@ -56,7 +61,7 @@ export default function ChatBar() {
     }
     addChatMessage(userMsg)
 
-    if (isGenerationIntent(text)) {
+    if (isGenerationIntent(text, !!activeAssetId)) {
       const useWorker = !!(import.meta.env.VITE_WORKER_URL ?? '').trim()
       const hasTripoKey = !!import.meta.env.VITE_TRIPO_API_KEY
       const modeLabel = useWorker
@@ -79,7 +84,7 @@ export default function ChatBar() {
           id: assetId,
           prompt: text,
           status: 'generating_2d',
-          tier: 'draft',
+          tier,
           createdAt: Date.now(),
           transforms: defaultTransforms(),
         }
