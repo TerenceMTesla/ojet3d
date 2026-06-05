@@ -6,3 +6,4 @@ dist
 worker/.wrangler/
 worker/.wrangler/
 .env.local
+.vercel
