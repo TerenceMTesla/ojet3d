@@ -1,6 +1,15 @@
-import { Suspense, useRef, useMemo } from 'react'
-import { Canvas } from '@react-three/fiber'
-import { OrbitControls, Environment, Center, useGLTF, GizmoHelper, GizmoViewport } from '@react-three/drei'
+import { Suspense, useRef, useMemo, useEffect } from 'react'
+import { Canvas, useThree } from '@react-three/fiber'
+import {
+  OrbitControls,
+  Environment,
+  Center,
+  Bounds,
+  useBounds,
+  useGLTF,
+  GizmoHelper,
+  GizmoViewport,
+} from '@react-three/drei'
 import { useStudio } from '../../store'
 import type { TransformState } from '../../types'
 import { useDeformShader } from './useDeformShader'
@@ -28,6 +37,19 @@ function Model({ url, transforms }: { url: string; transforms: TransformState })
   )
 }
 
+/**
+ * AutoFit — calls bounds.refresh().fit() once after the model loads so that
+ * each new asset starts framed regardless of its native scale or aspect.
+ */
+function AutoFit({ trigger }: { trigger: string }) {
+  const bounds = useBounds()
+  useEffect(() => {
+    const t = setTimeout(() => bounds.refresh().clip().fit(), 80)
+    return () => clearTimeout(t)
+  }, [trigger, bounds])
+  return null
+}
+
 function EmptyState() {
   return (
     <mesh>
@@ -35,6 +57,22 @@ function EmptyState() {
       <meshStandardMaterial color="#7c3aed" wireframe />
     </mesh>
   )
+}
+
+function FrameButton() {
+  // Programmatic refit, exposed via window for the toolbar to call
+  const { camera, controls } = useThree(state => ({
+    camera: state.camera,
+    controls: state.controls,
+  }))
+  useEffect(() => {
+    (window as unknown as { __ojet3dFitCamera?: () => void }).__ojet3dFitCamera = () => {
+      camera.position.set(0, 1.5, 4)
+      camera.lookAt(0, 0, 0)
+      ;(controls as { reset?: () => void } | null)?.reset?.()
+    }
+  }, [camera, controls])
+  return null
 }
 
 export default function Scene() {
@@ -53,7 +91,10 @@ export default function Scene() {
 
       <Suspense fallback={<EmptyState />}>
         {active?.glbUrl ? (
-          <Model key={active.id} url={active.glbUrl} transforms={active.transforms} />
+          <Bounds clip observe margin={1.2}>
+            <AutoFit trigger={active.id} />
+            <Model key={active.id} url={active.glbUrl} transforms={active.transforms} />
+          </Bounds>
         ) : (
           <EmptyState />
         )}
@@ -61,6 +102,7 @@ export default function Scene() {
 
       <OrbitControls makeDefault enablePan enableZoom enableRotate />
       <Environment preset="city" />
+      <FrameButton />
 
       <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
         <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="white" />

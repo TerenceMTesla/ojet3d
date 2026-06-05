@@ -1,4 +1,4 @@
-import { MessageSquare, Download, Layers } from 'lucide-react'
+import { MessageSquare, Download, Layers, Focus } from 'lucide-react'
 import { useStudio } from '../../store'
 
 export default function Toolbar() {
@@ -25,13 +25,23 @@ export default function Toolbar() {
 
       <div className="flex items-center gap-2">
         {active?.glbUrl && (
-          <button
-            onClick={downloadGlb}
-            className="flex items-center gap-1.5 text-xs text-studio-muted hover:text-studio-text border border-studio-border rounded px-2.5 py-1 transition"
-          >
-            <Download size={12} />
-            Export GLB
-          </button>
+          <>
+            <button
+              onClick={() => (window as unknown as { __ojet3dFitCamera?: () => void }).__ojet3dFitCamera?.()}
+              className="flex items-center gap-1.5 text-xs text-studio-muted hover:text-studio-text border border-studio-border rounded px-2.5 py-1 transition"
+              title="Reset camera and frame the model"
+            >
+              <Focus size={12} />
+              Frame
+            </button>
+            <button
+              onClick={downloadGlb}
+              className="flex items-center gap-1.5 text-xs text-studio-muted hover:text-studio-text border border-studio-border rounded px-2.5 py-1 transition"
+            >
+              <Download size={12} />
+              Export GLB
+            </button>
+          </>
         )}
         <button
           onClick={toggleChat}
