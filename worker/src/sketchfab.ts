@@ -28,40 +28,70 @@ interface DownloadBundle {
   glb?:  { url: string; size: number; expires: string }
 }
 
+// Common adjectives Sketchfab doesn't index well — strip them when refining
+const ADJECTIVE_STOPWORDS = new Set([
+  'a', 'an', 'the', 'create', 'make', 'generate', 'build', 'new', 'of', 'from',
+  'epic', 'awesome', 'cool', 'badass', 'sick', 'amazing', 'super', 'mega',
+  'spiritual', 'mystical', 'magical', 'futuristic', 'utopian', 'dystopian',
+  'cyber', 'cyberpunk', 'steampunk', 'fantasy', 'sci-fi', 'scifi',
+  'beautiful', 'pretty', 'ugly', 'small', 'big', 'huge', 'tiny', 'large',
+  'old', 'ancient', 'modern', 'cute', 'scary', 'dark', 'bright', 'colorful',
+  'realistic', 'stylized', 'low-poly', 'lowpoly', 'high-poly',
+])
+
+function extractKeywords(prompt: string): string[] {
+  return prompt
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !ADJECTIVE_STOPWORDS.has(w))
+}
+
+async function searchSketchfab(query: string, apiKey: string): Promise<SearchResult[]> {
+  const url = new URL(`${BASE}/search`)
+  url.searchParams.set('type', 'models')
+  url.searchParams.set('q', query)
+  url.searchParams.set('downloadable', 'true')
+  url.searchParams.set('count', '10')
+  url.searchParams.set('archives_flavours', 'true')
+
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Token ${apiKey}` },
+  })
+  if (!res.ok) {
+    throw new Error(`Sketchfab search failed: ${res.status} ${await res.text()}`)
+  }
+  const { results } = await res.json() as { results: SearchResult[] }
+  return results ?? []
+}
+
 export async function searchAndFetchGLB(
   prompt: string,
   apiKey: string,
 ): Promise<{ bytes: Uint8Array; modelName: string; author: string } | null> {
-  // 1. Search Sketchfab for downloadable models matching the prompt
-  const searchUrl = new URL(`${BASE}/search`)
-  searchUrl.searchParams.set('type', 'models')
-  searchUrl.searchParams.set('q', prompt)
-  searchUrl.searchParams.set('downloadable', 'true')
-  searchUrl.searchParams.set('count', '10')
-  searchUrl.searchParams.set('archives_flavours', 'true')
+  // Try a sequence of progressively simpler queries: literal prompt → stripped
+  // keywords (joined) → each keyword individually. The last word is often the
+  // noun ("fairy monster" → "monster"), so it gets the best fallback.
+  const keywords = extractKeywords(prompt)
+  const queries = [
+    prompt,
+    keywords.join(' '),
+    ...keywords.slice().reverse(),
+  ].filter((q, i, arr) => q && arr.indexOf(q) === i)
 
-  const searchRes = await fetch(searchUrl.toString(), {
-    headers: { Authorization: `Token ${apiKey}` },
-  })
-  if (!searchRes.ok) {
-    throw new Error(`Sketchfab search failed: ${searchRes.status} ${await searchRes.text()}`)
-  }
-  const { results } = await searchRes.json() as { results: SearchResult[] }
-  if (!results.length) return null
+  for (const query of queries) {
+    const results = await searchSketchfab(query, apiKey)
+    if (!results.length) continue
 
-  // 2. Walk results until we extract a usable GLB
-  for (const result of results) {
-    try {
-      const glb = await tryDownloadGLB(result.uid, apiKey)
-      if (glb) {
-        return {
-          bytes: glb,
-          modelName: result.name,
-          author: result.user.username,
+    for (const result of results) {
+      try {
+        const glb = await tryDownloadGLB(result.uid, apiKey)
+        if (glb) {
+          return { bytes: glb, modelName: result.name, author: result.user.username }
         }
+      } catch (err) {
+        console.warn(`[Sketchfab] skipping ${result.uid}:`, err)
       }
-    } catch (err) {
-      console.warn(`[Sketchfab] skipping ${result.uid}:`, err)
     }
   }
 

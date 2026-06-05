@@ -194,16 +194,21 @@ export class JobStore implements DurableObject {
         // No matching downloadable model → fall through to paid providers / sample
       }
 
-      // Optional paid tiers (still wired in case keys present)
-      // Optional generative fallback if Sketchfab returned nothing
+      // Optional generative fallback if Sketchfab returned nothing.
+      // We attempt Tripo only if a key is present — but auth/credit errors
+      // gracefully degrade to the sample GLB instead of failing the job.
       if (this.env.TRIPO_API_KEY) {
-        const webhookUrl = workerUrl ? `${workerUrl}/webhook/tripo/${job.id}` : undefined
-        const { taskId } = await textToModelWithTripo(job.prompt, this.env.TRIPO_API_KEY, webhookUrl)
-        if (!webhookUrl) {
-          const glbUrl = await pollTripo(taskId, this.env.TRIPO_API_KEY)
-          this.updateJob({ status: 'ready', glbUrl })
+        try {
+          const webhookUrl = workerUrl ? `${workerUrl}/webhook/tripo/${job.id}` : undefined
+          const { taskId } = await textToModelWithTripo(job.prompt, this.env.TRIPO_API_KEY, webhookUrl)
+          if (!webhookUrl) {
+            const glbUrl = await pollTripo(taskId, this.env.TRIPO_API_KEY)
+            this.updateJob({ status: 'ready', glbUrl })
+          }
+          return
+        } catch (err) {
+          console.warn('[Pipeline] Tripo unavailable, using sample GLB:', err)
         }
-        return
       }
 
       // Last resort: sample GLB so the studio stays functional
