@@ -1,4 +1,4 @@
-import { Suspense, useMemo, useEffect } from 'react'
+import { Suspense, useMemo, useEffect, useState } from 'react'
 import { Canvas, useThree, useLoader } from '@react-three/fiber'
 import {
   OrbitControls,
@@ -131,32 +131,43 @@ function FrameButton() {
 }
 
 // ── Drop zone overlay (outside Canvas) ──────────────────────────────────────
+// Uses pointer-events:none normally so OrbitControls works.
+// Only activates when a drag enters the window.
 
 function DropZone({ onFile }: { onFile: (f: File) => void }) {
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    const file = e.dataTransfer.files[0]
-    if (file) onFile(file)
-  }
+  const [dragging, setDragging] = useState(false)
+
+  useEffect(() => {
+    const enter = (e: DragEvent) => { if (e.dataTransfer?.types.includes('Files')) setDragging(true) }
+    const leave = (e: DragEvent) => { if (!e.relatedTarget) setDragging(false) }
+    const prevent = (e: DragEvent) => e.preventDefault()
+    window.addEventListener('dragenter', enter)
+    window.addEventListener('dragleave', leave)
+    window.addEventListener('dragover', prevent)
+    window.addEventListener('drop', prevent)
+    return () => {
+      window.removeEventListener('dragenter', enter)
+      window.removeEventListener('dragleave', leave)
+      window.removeEventListener('dragover', prevent)
+      window.removeEventListener('drop', prevent)
+    }
+  }, [])
+
+  if (!dragging) return null
+
   return (
     <div
-      className="absolute inset-0 z-10 pointer-events-none"
+      className="absolute inset-0 z-10 bg-studio-accent/10 border-2 border-dashed border-studio-accent flex items-center justify-center"
       onDragOver={(e) => e.preventDefault()}
-      onDrop={onDrop}
-      style={{ pointerEvents: 'none' }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault()
+        setDragging(false)
+        const file = e.dataTransfer.files[0]
+        if (file) onFile(file)
+      }}
     >
-      <div
-        style={{ pointerEvents: 'all' }}
-        className="absolute inset-0"
-        onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('bg-studio-accent/10') }}
-        onDragLeave={(e) => e.currentTarget.classList.remove('bg-studio-accent/10')}
-        onDrop={(e) => {
-          e.preventDefault()
-          e.currentTarget.classList.remove('bg-studio-accent/10')
-          const file = e.dataTransfer.files[0]
-          if (file) onFile(file)
-        }}
-      />
+      <span className="text-studio-accent text-sm font-medium pointer-events-none">Drop file to load</span>
     </div>
   )
 }
